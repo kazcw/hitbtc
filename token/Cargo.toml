@@ -1,0 +1,9 @@
+[package]
+name = "token"
+version = "0.1.0"
+authors = ["Kaz Wesley <kaz@lambdaverse.org>"]
+
+[dependencies]
+failure = "0.1"
+failure_derive = "0.1"
+serde = "1.0"
