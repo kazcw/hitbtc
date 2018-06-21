@@ -126,3 +126,24 @@ impl<'de> Deserialize<'de> for Token {
         deserializer.deserialize_str(TokenVisitor)
     }
 }
+
+impl From<Token> for Box<str> {
+    fn from(t: Token) -> Box<str> {
+        let n = t.0;
+        let mut bytes = vec![
+            (n >> 56) as u8,
+            (n >> 48) as u8,
+            (n >> 40) as u8,
+            (n >> 32) as u8,
+            (n >> 24) as u8,
+            (n >> 16) as u8,
+            (n >> 8) as u8,
+            n as u8,
+        ];
+        if let Some((len, _)) = bytes.iter().cloned().enumerate().find(|(_, x)| *x == 0) {
+            bytes.truncate(len);
+        }
+        let bytes = bytes.into_boxed_slice();
+        unsafe { str::from_boxed_utf8_unchecked(bytes) }
+    }
+}
