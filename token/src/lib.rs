@@ -1,10 +1,6 @@
 #![feature(try_from)]
 
-extern crate failure;
-#[macro_use]
-extern crate failure_derive;
-extern crate serde;
-
+use failure_derive::Fail;
 use serde::de::{self, Deserialize, Deserializer, Visitor};
 use serde::ser::{Serialize, Serializer};
 
@@ -91,7 +87,7 @@ impl Serialize for Token {
     }
 }
 
-impl<'a> TryFrom<&'a str> for Token {
+impl TryFrom<&str> for Token {
     type Error = TokenError;
 
     fn try_from(s: &str) -> Result<Self, TokenError> {
@@ -103,13 +99,13 @@ impl<'a> TryFrom<&'a str> for Token {
     }
 }
 
-impl<'de> Deserialize<'de> for Token {
+impl Deserialize<'de> for Token {
     fn deserialize<D>(deserializer: D) -> Result<Token, D::Error>
     where
         D: Deserializer<'de>,
     {
         struct TokenVisitor;
-        impl<'de> Visitor<'de> for TokenVisitor {
+        impl Visitor<'_> for TokenVisitor {
             type Value = Token;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
