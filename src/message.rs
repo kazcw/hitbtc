@@ -1,3 +1,5 @@
+use serde_derive::{Deserialize, Serialize};
+
 #[derive(Serialize)]
 #[serde(tag = "method", content = "params")]
 pub enum ServerCommand {
@@ -6,6 +8,7 @@ pub enum ServerCommand {
 
 #[derive(Serialize)]
 pub struct Envelope<T> {
+    #[serde(flatten)]
     pub body: T,
     pub id: u64,
 }
@@ -44,8 +47,15 @@ pub enum ClientMessage {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ClientError {
+    pub message: String,
+    pub code: u64,
+}
+
+#[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum ClientEnvelope {
     Message(ClientMessage),
     Reply { result: bool, id: u64 },
+    Error { error: ClientError, id: Option<u64> },
 }
