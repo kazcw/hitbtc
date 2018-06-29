@@ -1,4 +1,4 @@
-use decim8::Decim8;
+use decimx::DecimX;
 use serde_derive::{Deserialize, Serialize};
 
 #[derive(Serialize)]
@@ -22,8 +22,8 @@ pub enum Symbol {
 
 #[derive(Debug, Deserialize)]
 pub struct Order {
-    pub price: Decim8,
-    pub size: Decim8,
+    pub price: DecimX,
+    pub size: DecimX,
 }
 
 #[derive(Debug, Deserialize)]

@@ -4,7 +4,7 @@ use std::env;
 
 use chrono::prelude::Local;
 use colored::{Color, Colorize};
-use decim8::Decim8;
+use decimx::DecimX;
 use failure::Fail;
 use futures::{Future, Sink, Stream};
 use log::{debug, info, log, warn};
@@ -26,8 +26,8 @@ pub enum Error {
 
 #[derive(Default)]
 struct Book {
-    bids: BTreeMap<Decim8, Decim8>,
-    asks: BTreeMap<Decim8, Decim8>,
+    bids: BTreeMap<DecimX, DecimX>,
+    asks: BTreeMap<DecimX, DecimX>,
 }
 
 fn cmpcolor<T: Ord>(a: T, b: T) -> Color {
@@ -155,14 +155,14 @@ fn update_book(m: ClientMessage, book: &mut Book) {
             let bestask0 =
                 book.asks.iter().next().map(|o| o.0).unwrap().clone();
             for o in bid.into_iter() {
-                if o.size == (0, 0).into() {
+                if o.size.is_zero() {
                     book.bids.remove(&o.price);
                 } else {
                     book.bids.insert(o.price, o.size);
                 }
             }
             for o in ask.into_iter() {
-                if o.size == (0, 0).into() {
+                if o.size.is_zero() {
                     book.asks.remove(&o.price);
                 } else {
                     book.asks.insert(o.price, o.size);

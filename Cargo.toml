@@ -9,7 +9,7 @@ edition = "2018"
 [dependencies]
 chrono = "0.4"
 colored = "1.6"
-decim8 = { path = "../decim8" }
+decimx = { path = "../decimx" }
 env_logger = "0.5"
 failure = "0.1"
 futures = "0.1"
