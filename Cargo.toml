@@ -1,4 +1,4 @@
-cargo-features = ["edition", "rename-dependency"]
+cargo-features = ["edition"]
 
 [package]
 name = "hitbtc"
@@ -7,10 +7,12 @@ authors = ["Kaz Wesley <kaz@lambdaverse.org>"]
 edition = "2018"
 
 [dependencies]
+chrono = "0.4"
+colored = "1.6"
+decim8 = { path = "../decim8" }
 env_logger = "0.5"
 failure = "0.1"
-futures = { path = "/home/kaz/a/futures-rs/futures" }
-legacies = { version = "0.1", package = "futures" }
+futures = "0.1"
 log = "0.4"
 serde = "1.0"
 serde_derive = "1.0"
@@ -19,3 +21,6 @@ tokio = "0.1"
 tokio-tungstenite = { path = "/home/kaz/a/tokio-tungstenite" }
 tungstenite = "0.5"
 url = "1.7"
+
+#futures = { path = "/home/kaz/a/futures-rs/futures" }
+#legacies = { version = "0.1", package = "futures" }

@@ -1,3 +1,4 @@
+use decim8::Decim8;
 use serde_derive::{Deserialize, Serialize};
 
 #[derive(Serialize)]
@@ -16,12 +17,13 @@ pub struct Envelope<T> {
 #[derive(Debug, Deserialize, Serialize, Copy, Clone, Hash, Eq, PartialEq)]
 pub enum Symbol {
     XMRBTC,
+    LTCBTC,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Order {
-    pub price: String,
-    pub size: String,
+    pub price: Decim8,
+    pub size: Decim8,
 }
 
 #[derive(Debug, Deserialize)]
