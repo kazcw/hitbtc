@@ -1,5 +1,5 @@
-use std::collections::BTreeMap;
 use std::cmp::Ordering;
+use std::collections::BTreeMap;
 use std::env;
 
 use chrono::prelude::Local;
@@ -129,31 +129,16 @@ fn handle(m: ClientEnvelope) -> Result<Option<ClientMessage>, Error> {
 
 fn update_book(m: ClientMessage, book: &mut Book) {
     match m {
-        ClientMessage::SnapshotOrderbook(SnapshotOrderbook {
-            ask,
-            bid,
-            symbol,
-        }) => {
+        ClientMessage::SnapshotOrderbook(SnapshotOrderbook { ask, bid, symbol }) => {
             book.bids = bid.into_iter().map(|o| (o.price, o.size)).collect();
             book.asks = ask.into_iter().map(|o| (o.price, o.size)).collect();
             let bestbid = book.bids.iter().rev().next().map(|o| o.0);
             let bestask = book.asks.iter().next().map(|o| o.0);
-            println!(
-                "{} {} {}",
-                Local::now(),
-                bestbid.unwrap(),
-                bestask.unwrap()
-            );
+            println!("{} {} {}", Local::now(), bestbid.unwrap(), bestask.unwrap());
         }
-        ClientMessage::UpdateOrderbook(UpdateOrderbook {
-            ask,
-            bid,
-            symbol,
-        }) => {
-            let bestbid0 =
-                book.bids.iter().rev().next().map(|o| o.0).unwrap().clone();
-            let bestask0 =
-                book.asks.iter().next().map(|o| o.0).unwrap().clone();
+        ClientMessage::UpdateOrderbook(UpdateOrderbook { ask, bid, symbol }) => {
+            let bestbid0 = book.bids.iter().rev().next().map(|o| o.0).unwrap().clone();
+            let bestask0 = book.asks.iter().next().map(|o| o.0).unwrap().clone();
             for o in bid.into_iter() {
                 if o.size.is_zero() {
                     book.bids.remove(&o.price);
@@ -168,10 +153,8 @@ fn update_book(m: ClientMessage, book: &mut Book) {
                     book.asks.insert(o.price, o.size);
                 }
             }
-            let bestbid1 =
-                book.bids.iter().rev().next().map(|o| o.0).unwrap().clone();
-            let bestask1 =
-                book.asks.iter().next().map(|o| o.0).unwrap().clone();
+            let bestbid1 = book.bids.iter().rev().next().map(|o| o.0).unwrap().clone();
+            let bestask1 = book.asks.iter().next().map(|o| o.0).unwrap().clone();
             if bestbid1 != bestbid0 || bestask1 != bestask0 {
                 println!(
                     "{} {} {}",
