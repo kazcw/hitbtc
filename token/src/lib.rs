@@ -6,7 +6,7 @@ use serde::ser::{Serialize, Serializer};
 
 use std::convert::TryFrom;
 use std::fmt::{self, Debug, Display, Formatter};
-use std::str;
+use std::str::{self, FromStr};
 
 #[derive(PartialEq, Eq, Hash, Copy, Clone, PartialOrd, Ord)]
 pub struct Token(u64);
@@ -91,6 +91,14 @@ impl TryFrom<&str> for Token {
     type Error = TokenError;
 
     fn try_from(s: &str) -> Result<Self, TokenError> {
+        s.parse()
+    }
+}
+
+impl FromStr for Token {
+    type Err = TokenError;
+
+    fn from_str(s: &str) -> Result<Self, TokenError> {
         let bytes = s.bytes();
         let shift = 8 * (8usize
             .checked_sub(bytes.len())
