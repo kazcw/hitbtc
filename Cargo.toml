@@ -9,7 +9,6 @@ edition = "2018"
 [dependencies]
 chrono = "0.4"
 colored = "1.6"
-decimx = { path = "../decimx" }
 env_logger = "0.5"
 failure = "0.1"
 futures = "0.1"
@@ -21,6 +20,7 @@ tokio = "0.1"
 tokio-tungstenite = { path = "/home/kaz/a/tokio-tungstenite" }
 tungstenite = "0.5"
 url = "1.7"
+xenon = { path = "../../xenon" }
 
 [dependencies.simble]
 version = "0.1"

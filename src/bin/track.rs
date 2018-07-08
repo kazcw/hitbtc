@@ -1,19 +1,22 @@
+use std::cell::Cell;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::env;
+use std::rc::Rc;
 
 use chrono::prelude::Local;
 use colored::{Color, Colorize};
-use decimx::DecimX;
 use failure::Fail;
 use futures::{Future, Sink, Stream};
 use log::{debug, info, log, trace, warn};
 use simble::symbol;
 use tokio_tungstenite::connect_async;
 use tungstenite::protocol::Message;
+use xenon::{Xe, XeNS};
 
 use hitbtc::message::{
-    ClientEnvelope, ClientMessage, Envelope, ServerCommand, SnapshotOrderbook, UpdateOrderbook,
+    ClientEnvelope, ClientMessage, Envelope, Order, Reply, ServerCommand, SnapshotOrderbook,
+    UpdateOrderbook,
 };
 
 #[derive(Debug, Fail)]
@@ -26,8 +29,8 @@ pub enum Error {
 
 #[derive(Default)]
 struct Book {
-    bids: BTreeMap<DecimX, DecimX>,
-    asks: BTreeMap<DecimX, DecimX>,
+    bids: BTreeMap<XeNS, XeNS>,
+    asks: BTreeMap<XeNS, XeNS>,
 }
 
 fn cmpcolor<T: Ord>(a: T, b: T) -> Color {
@@ -58,29 +61,35 @@ pub fn main() {
             .parse()
             .unwrap();
     }
+
+    let get_symbol = serde_json::to_string(&Envelope {
+        body: ServerCommand::GetSymbol { symbol: pair },
+        id: 1,
+    }).unwrap();
+    let get_symbol = Message::Text(get_symbol);
+
     let sub_req = serde_json::to_string(&Envelope {
         body: ServerCommand::SubscribeOrderbook { symbol: pair },
-        id: 1,
+        id: 2,
     }).unwrap();
     let sub_req = Message::Text(sub_req);
 
     let mut book: Book = Default::default();
+    let precision = Rc::new(Cell::new(None));
+    let prec2 = Rc::clone(&precision);
 
     let url = url::Url::parse("wss://api.hitbtc.com/api/2/ws").unwrap();
     let client = connect_async(url)
         .map_err(|e| Error::Tungstenite(e))
-        .and_then(|(ws, _response)| {
-            debug!("connected");
-            ws.send(sub_req).map_err(|e| Error::Tungstenite(e))
-        })
+        .and_then(|(ws, _response)| ws.send(get_symbol).map_err(|e| Error::Tungstenite(e)))
+        .and_then(|ws| ws.send(sub_req).map_err(|e| Error::Tungstenite(e)))
         .and_then(move |ws| {
-            debug!("subscribed");
             ws.map_err(|e| Error::Tungstenite(e))
-                .and_then(handle_message)
+                .and_then(move |m| handle_message(m, &precision))
                 .for_each(move |m| {
                     if let Some(m) = m {
                         trace!("message: {:?}", m);
-                        update_book(m, &mut book, byvol);
+                        update_book(m, &mut book, byvol, &prec2);
                     }
                     Ok(())
                 })
@@ -94,10 +103,13 @@ pub fn main() {
     rt.run().unwrap();
 }
 
-fn handle_message(m: Message) -> Result<Option<ClientMessage>, Error> {
+fn handle_message(
+    m: Message,
+    precision: &Cell<Option<(i8, i8)>>,
+) -> Result<Option<ClientMessage>, Error> {
     match m {
         Message::Text(txt) => match serde_json::from_str(&txt) {
-            Ok(x) => handle(x),
+            Ok(x) => handle(x, precision),
             Err(_) => {
                 warn!("got unknown message: {}", txt);
                 Ok(None)
@@ -118,11 +130,50 @@ fn handle_message(m: Message) -> Result<Option<ClientMessage>, Error> {
     }
 }
 
-fn handle(m: ClientEnvelope) -> Result<Option<ClientMessage>, Error> {
+fn exp(s: &str) -> Result<i8, ()> {
+    let mut x = 0i32;
+    let mut q = 0i32;
+    for c in s.as_bytes() {
+        match c {
+            b'0' => {
+                x += q;
+            }
+            b'.' => {
+                if x != 0 {
+                    return Err(());
+                }
+                x = -1;
+                q = -1;
+            }
+            b'1' => {
+                if q == 1 {
+                    return Err(());
+                }
+                q = 1;
+            }
+            _ => return Err(()),
+        }
+    }
+    Ok(x as i8)
+}
+
+fn handle(
+    m: ClientEnvelope,
+    precision: &Cell<Option<(i8, i8)>>,
+) -> Result<Option<ClientMessage>, Error> {
     match m {
         ClientEnvelope::Message(m) => Ok(Some(m)),
         ClientEnvelope::Reply { result, .. } => {
-            info!("got reply: {}", result);
+            match result {
+                Reply::GetSymbol(x) => {
+                    debug!("symbol info: {:?}", x);
+                    precision.set(Some((
+                        exp(&x.tick_size).expect("bad tick?"),
+                        exp(&x.quantity_increment).expect("bad quant inc?"),
+                    )));
+                }
+                _ => info!("got reply: {:?}", result),
+            }
             Ok(None)
         }
         ClientEnvelope::Error { error, .. } => {
@@ -132,11 +183,18 @@ fn handle(m: ClientEnvelope) -> Result<Option<ClientMessage>, Error> {
     }
 }
 
-fn update_book(m: ClientMessage, book: &mut Book, byvol: bool) {
+fn update_book(m: ClientMessage, book: &mut Book, byvol: bool, precision: &Cell<Option<(i8, i8)>>) {
+    let (aprec, sprec) = precision.get().unwrap();
     match m {
         ClientMessage::SnapshotOrderbook(SnapshotOrderbook { ask, bid, .. }) => {
-            book.bids = bid.into_iter().map(|o| (o.price, o.size)).collect();
-            book.asks = ask.into_iter().map(|o| (o.price, o.size)).collect();
+            let order = move |o: Order| {
+                (
+                    Xe::from_str_at_precision(&o.price, aprec).expect("bad price xe?"),
+                    Xe::from_str_at_precision(&o.size, sprec).expect("bad size xe?"),
+                )
+            };
+            book.bids = bid.into_iter().map(order).collect();
+            book.asks = ask.into_iter().map(order).collect();
             let bestbid = book.bids.iter().next_back().map(|o| (*o.0, *o.1)).unwrap();
             let bestask = book.asks.iter().next().map(|o| (*o.0, *o.1)).unwrap();
             if byvol {
@@ -153,24 +211,31 @@ fn update_book(m: ClientMessage, book: &mut Book, byvol: bool) {
             }
         }
         ClientMessage::UpdateOrderbook(UpdateOrderbook { ask, bid, .. }) => {
-            let bestbid0 = book.bids.iter().next_back().map(|o| (*o.0, *o.1));
-            let bestask0 = book.asks.iter().next().map(|o| (*o.0, *o.1));
-            for o in bid.into_iter() {
-                if o.size.is_zero() {
-                    book.bids.remove(&o.price);
+            let order = move |o: Order| {
+                (
+                    Xe::from_str_at_precision(&o.price, aprec).unwrap(),
+                    Xe::from_str_at_precision(&o.size, sprec).unwrap(),
+                )
+            };
+            let from_book = |o: (&XeNS, &XeNS)| (*o.0, *o.1);
+            let bestbid0 = book.bids.iter().next_back().map(from_book);
+            let bestask0 = book.asks.iter().next().map(from_book);
+            for o in bid.into_iter().map(order) {
+                if o.1.is_zero() {
+                    book.bids.remove(&o.0);
                 } else {
-                    book.bids.insert(o.price, o.size);
+                    book.bids.insert(o.0, o.1);
                 }
             }
-            for o in ask.into_iter() {
-                if o.size.is_zero() {
-                    book.asks.remove(&o.price);
+            for o in ask.into_iter().map(order) {
+                if o.1.is_zero() {
+                    book.asks.remove(&o.0);
                 } else {
-                    book.asks.insert(o.price, o.size);
+                    book.asks.insert(o.0, o.1);
                 }
             }
-            let bestbid1 = book.bids.iter().next_back().map(|o| (*o.0, *o.1));
-            let bestask1 = book.asks.iter().next().map(|o| (*o.0, *o.1));
+            let bestbid1 = book.bids.iter().next_back().map(from_book);
+            let bestask1 = book.asks.iter().next().map(from_book);
             // good grief, surely there's a better way
             if let Some(bestbid0) = bestbid0 {
                 if let Some(bestask0) = bestask0 {
@@ -183,18 +248,22 @@ fn update_book(m: ClientMessage, book: &mut Book, byvol: bool) {
                                             "{} {} {} {} {}",
                                             Local::now(),
                                             format!("{}", bestbid1.1),
-                                            format!("{}", bestbid1.0).color(cmpcolor(bestbid1.0, bestbid0.0)),
-                                            format!("{}", bestask1.0).color(cmpcolor(bestask1.0, bestask0.0)),
+                                            format!("{}", bestbid1.0)
+                                                .color(cmpcolor(bestbid1.0, bestbid0.0)),
+                                            format!("{}", bestask1.0)
+                                                .color(cmpcolor(bestask1.0, bestask0.0)),
                                             format!("{}", bestask1.1),
                                         );
                                     } else {
                                         println!(
                                             "{} {} {} {} {}",
                                             Local::now(),
-                                            format!("{}", bestbid1.1).color(cmpcolor(bestbid1.1, bestbid0.1)),
+                                            format!("{}", bestbid1.1)
+                                                .color(cmpcolor(bestbid1.1, bestbid0.1)),
                                             format!("{}", bestbid1.0),
                                             format!("{}", bestask1.0),
-                                            format!("{}", bestask1.1).color(cmpcolor(bestask0.1, bestask1.1)),
+                                            format!("{}", bestask1.1)
+                                                .color(cmpcolor(bestask0.1, bestask1.1)),
                                         );
                                     }
                                 }
@@ -203,8 +272,10 @@ fn update_book(m: ClientMessage, book: &mut Book, byvol: bool) {
                                     println!(
                                         "{} {} {}",
                                         Local::now(),
-                                        format!("{}", bestbid1.0).color(cmpcolor(bestbid1.0, bestbid0.0)),
-                                        format!("{}", bestask1.0).color(cmpcolor(bestask1.0, bestask0.0))
+                                        format!("{}", bestbid1.0)
+                                            .color(cmpcolor(bestbid1.0, bestbid0.0)),
+                                        format!("{}", bestask1.0)
+                                            .color(cmpcolor(bestask1.0, bestask0.0))
                                     );
                                 }
                             }

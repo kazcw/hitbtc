@@ -1,4 +1,3 @@
-use decimx::DecimX;
 use serde_derive::{Deserialize, Serialize};
 use simble::Symbol;
 
@@ -6,6 +5,7 @@ use simble::Symbol;
 #[serde(tag = "method", content = "params")]
 pub enum ServerCommand {
     SubscribeOrderbook { symbol: Symbol },
+    GetSymbol { symbol: Symbol },
 }
 
 #[derive(Copy, Clone, Debug, Serialize)]
@@ -15,10 +15,10 @@ pub struct Envelope<T> {
     pub id: u64,
 }
 
-#[derive(Copy, Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Order {
-    pub price: DecimX,
-    pub size: DecimX,
+    pub price: String,
+    pub size: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -51,9 +51,29 @@ pub struct ClientError {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetSymbol {
+    // id: Symbol,
+    pub base_currency: Symbol,
+    pub quote_currency: Symbol,
+    pub quantity_increment: String,
+    pub tick_size: String,
+    pub take_liquidity_rate: String,
+    pub provide_liquidity_rate: String,
+    pub fee_currency: Symbol,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+pub enum Reply {
+    Bool(bool),
+    GetSymbol(GetSymbol),
+}
+
+#[derive(Clone, Debug, Deserialize)]
 #[serde(untagged)]
 pub enum ClientEnvelope {
     Message(ClientMessage),
-    Reply { result: bool, id: u64 },
+    Reply { result: Reply, id: u64 },
     Error { error: ClientError, id: Option<u64> },
 }
