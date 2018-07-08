@@ -7,13 +7,13 @@ use colored::{Color, Colorize};
 use decimx::DecimX;
 use failure::Fail;
 use futures::{Future, Sink, Stream};
-use log::{debug, info, log, warn};
+use log::{debug, info, log, trace, warn};
+use simble::symbol;
 use tokio_tungstenite::connect_async;
 use tungstenite::protocol::Message;
 
 use hitbtc::message::{
-    ClientEnvelope, ClientMessage, Envelope, Order, ServerCommand, SnapshotOrderbook, Symbol,
-    UpdateOrderbook,
+    ClientEnvelope, ClientMessage, Envelope, ServerCommand, SnapshotOrderbook, UpdateOrderbook,
 };
 
 #[derive(Debug, Fail)]
@@ -44,17 +44,22 @@ pub fn main() {
     let mut args = env::args();
     args.next().unwrap();
 
-    let symbol = match args
+    let mut pair = args
         .next()
         .expect("expected market argument (e.g. XMRBTC)")
-        .as_ref()
-    {
-        "XMRBTC" => Symbol::XMRBTC,
-        "LTCBTC" => Symbol::LTCBTC,
-        _ => panic!("unknown market pair!"),
-    };
+        .parse()
+        .unwrap();
+    let mut byvol = false;
+    if pair == symbol("-v") {
+        byvol = true;
+        pair = args
+            .next()
+            .expect("expected market argument (e.g. XMRBTC)")
+            .parse()
+            .unwrap();
+    }
     let sub_req = serde_json::to_string(&Envelope {
-        body: ServerCommand::SubscribeOrderbook { symbol },
+        body: ServerCommand::SubscribeOrderbook { symbol: pair },
         id: 1,
     }).unwrap();
     let sub_req = Message::Text(sub_req);
@@ -68,14 +73,14 @@ pub fn main() {
             debug!("connected");
             ws.send(sub_req).map_err(|e| Error::Tungstenite(e))
         })
-        .and_then(|ws| {
+        .and_then(move |ws| {
             debug!("subscribed");
             ws.map_err(|e| Error::Tungstenite(e))
                 .and_then(handle_message)
                 .for_each(move |m| {
                     if let Some(m) = m {
-                        debug!("got message: {:?}", m);
-                        update_book(m, &mut book);
+                        trace!("message: {:?}", m);
+                        update_book(m, &mut book, byvol);
                     }
                     Ok(())
                 })
@@ -127,18 +132,29 @@ fn handle(m: ClientEnvelope) -> Result<Option<ClientMessage>, Error> {
     }
 }
 
-fn update_book(m: ClientMessage, book: &mut Book) {
+fn update_book(m: ClientMessage, book: &mut Book, byvol: bool) {
     match m {
-        ClientMessage::SnapshotOrderbook(SnapshotOrderbook { ask, bid, symbol }) => {
+        ClientMessage::SnapshotOrderbook(SnapshotOrderbook { ask, bid, .. }) => {
             book.bids = bid.into_iter().map(|o| (o.price, o.size)).collect();
             book.asks = ask.into_iter().map(|o| (o.price, o.size)).collect();
-            let bestbid = book.bids.iter().rev().next().map(|o| o.0);
-            let bestask = book.asks.iter().next().map(|o| o.0);
-            println!("{} {} {}", Local::now(), bestbid.unwrap(), bestask.unwrap());
+            let bestbid = book.bids.iter().next_back().map(|o| (*o.0, *o.1)).unwrap();
+            let bestask = book.asks.iter().next().map(|o| (*o.0, *o.1)).unwrap();
+            if byvol {
+                println!(
+                    "{} {} {} {} {}",
+                    Local::now(),
+                    format!("{}", bestbid.1),
+                    format!("{}", bestbid.0),
+                    format!("{}", bestask.0),
+                    format!("{}", bestask.1),
+                );
+            } else {
+                println!("{} {} {}", Local::now(), bestbid.0, bestask.0);
+            }
         }
-        ClientMessage::UpdateOrderbook(UpdateOrderbook { ask, bid, symbol }) => {
-            let bestbid0 = book.bids.iter().rev().next().map(|o| o.0).unwrap().clone();
-            let bestask0 = book.asks.iter().next().map(|o| o.0).unwrap().clone();
+        ClientMessage::UpdateOrderbook(UpdateOrderbook { ask, bid, .. }) => {
+            let bestbid0 = book.bids.iter().next_back().map(|o| (*o.0, *o.1));
+            let bestask0 = book.asks.iter().next().map(|o| (*o.0, *o.1));
             for o in bid.into_iter() {
                 if o.size.is_zero() {
                     book.bids.remove(&o.price);
@@ -153,15 +169,48 @@ fn update_book(m: ClientMessage, book: &mut Book) {
                     book.asks.insert(o.price, o.size);
                 }
             }
-            let bestbid1 = book.bids.iter().rev().next().map(|o| o.0).unwrap().clone();
-            let bestask1 = book.asks.iter().next().map(|o| o.0).unwrap().clone();
-            if bestbid1 != bestbid0 || bestask1 != bestask0 {
-                println!(
-                    "{} {} {}",
-                    Local::now(),
-                    format!("{}", bestbid1).color(cmpcolor(bestbid1, bestbid0)),
-                    format!("{}", bestask1).color(cmpcolor(bestask1, bestask0))
-                );
+            let bestbid1 = book.bids.iter().next_back().map(|o| (*o.0, *o.1));
+            let bestask1 = book.asks.iter().next().map(|o| (*o.0, *o.1));
+            // good grief, surely there's a better way
+            if let Some(bestbid0) = bestbid0 {
+                if let Some(bestask0) = bestask0 {
+                    if let Some(bestbid1) = bestbid1 {
+                        if let Some(bestask1) = bestask1 {
+                            if byvol {
+                                if bestbid1 != bestbid0 || bestask1 != bestask0 {
+                                    if bestbid1.0 != bestbid0.0 || bestask1.0 != bestask0.0 {
+                                        println!(
+                                            "{} {} {} {} {}",
+                                            Local::now(),
+                                            format!("{}", bestbid1.1),
+                                            format!("{}", bestbid1.0).color(cmpcolor(bestbid1.0, bestbid0.0)),
+                                            format!("{}", bestask1.0).color(cmpcolor(bestask1.0, bestask0.0)),
+                                            format!("{}", bestask1.1),
+                                        );
+                                    } else {
+                                        println!(
+                                            "{} {} {} {} {}",
+                                            Local::now(),
+                                            format!("{}", bestbid1.1).color(cmpcolor(bestbid1.1, bestbid0.1)),
+                                            format!("{}", bestbid1.0),
+                                            format!("{}", bestask1.0),
+                                            format!("{}", bestask1.1).color(cmpcolor(bestask0.1, bestask1.1)),
+                                        );
+                                    }
+                                }
+                            } else {
+                                if bestbid1.0 != bestbid0.0 || bestask1.0 != bestask0.0 {
+                                    println!(
+                                        "{} {} {}",
+                                        Local::now(),
+                                        format!("{}", bestbid1.0).color(cmpcolor(bestbid1.0, bestbid0.0)),
+                                        format!("{}", bestask1.0).color(cmpcolor(bestask1.0, bestask0.0))
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

@@ -1,16 +1,17 @@
 //use std::sync::mpsc::channel::{self, Receiver, Sender};
 
+/*
 use failure::Fail;
 use futures::{Future, Sink, Stream};
 use log::{debug, info, log, warn};
 use tokio_tungstenite::connect_async;
 use tungstenite::protocol::Message as WsMessage;
 
-pub mod message;
 use crate::message::ClientMessage as Message;
-use crate::message::{
-    ClientEnvelope, Envelope, Order, ServerCommand, SnapshotOrderbook, Symbol, UpdateOrderbook,
-};
+use crate::message::{ClientEnvelope, Envelope, Order, ServerCommand, SnapshotOrderbook, UpdateOrderbook};
+*/
+
+pub mod message;
 
 /*
 #[derive(Debug, Fail)]

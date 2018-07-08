@@ -22,5 +22,6 @@ tokio-tungstenite = { path = "/home/kaz/a/tokio-tungstenite" }
 tungstenite = "0.5"
 url = "1.7"
 
-#futures = { path = "/home/kaz/a/futures-rs/futures" }
-#legacies = { version = "0.1", package = "futures" }
+[dependencies.simble]
+version = "0.1"
+features = ["nightly", "serde"]
