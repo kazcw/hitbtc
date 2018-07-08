@@ -1,14 +1,13 @@
-use std::cell::Cell;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::env;
-use std::rc::Rc;
 
 use chrono::prelude::Local;
 use colored::{Color, Colorize};
 use failure::Fail;
+use futures::future::lazy;
 use futures::{Future, Sink, Stream};
-use log::{debug, info, log, trace, warn};
+use log::{debug, error, info, log, trace, warn};
 use simble::symbol;
 use tokio_tungstenite::connect_async;
 use tungstenite::protocol::Message;
@@ -74,60 +73,63 @@ pub fn main() {
     }).unwrap();
     let sub_req = Message::Text(sub_req);
 
-    let mut book: Book = Default::default();
-    let precision = Rc::new(Cell::new(None));
-    let prec2 = Rc::clone(&precision);
+    let mut rt = tokio::runtime::current_thread::Runtime::new().unwrap();
 
     let url = url::Url::parse("wss://api.hitbtc.com/api/2/ws").unwrap();
-    let client = connect_async(url)
-        .map_err(|e| Error::Tungstenite(e))
-        .and_then(|(ws, _response)| ws.send(get_symbol).map_err(|e| Error::Tungstenite(e)))
-        .and_then(|ws| ws.send(sub_req).map_err(|e| Error::Tungstenite(e)))
+    let (ws, _response) = rt
+        .block_on(lazy(move || connect_async(url)))
+        .map_err(Error::Tungstenite)
+        .expect("failed to connect");
+
+    let mut ws = rt
+        .block_on(lazy(move || ws.send(get_symbol)))
+        .expect("requesting symbol info");
+
+    let precision = loop {
+        let (m, s) = rt
+            .block_on(ws.into_future())
+            .map_err(|_| ())
+            .expect("receiving message during setup");
+        ws = s;
+        match m {
+            Some(Message::Text(txt)) => match serde_json::from_str(&txt) {
+                Ok(ClientEnvelope::Reply {
+                    result: Reply::GetSymbol(x),
+                    ..
+                }) => {
+                    debug!("symbol info: {:?}", x);
+                    break (
+                        exp(&x.tick_size).expect("bad tick?"),
+                        exp(&x.quantity_increment).expect("bad quant inc?"),
+                    );
+                }
+                _ => warn!("unexpected message during setup: {}", txt),
+            },
+            _ => warn!("unexpected during setup: {:?}", m),
+        }
+    };
+
+    let mut book = Book::default();
+    let client = lazy(move || ws.send(sub_req).map_err(Error::Tungstenite))
         .and_then(move |ws| {
-            ws.map_err(|e| Error::Tungstenite(e))
-                .and_then(move |m| handle_message(m, &precision))
-                .for_each(move |m| {
-                    if let Some(m) = m {
-                        trace!("message: {:?}", m);
-                        update_book(m, &mut book, byvol, &prec2);
-                    }
-                    Ok(())
-                })
+            ws.map_err(Error::Tungstenite).for_each(move |m| Ok(match m {
+                Message::Text(txt) => match serde_json::from_str(&txt) {
+                    Ok(ClientEnvelope::Message(m)) => update_book(m, &mut book, byvol, precision),
+                    Ok(ClientEnvelope::Reply { result: Reply::Bool(true), .. }) => (), // response to subscription request
+                    Ok(ClientEnvelope::Reply { result, .. }) => warn!("got reply post-setup: {:?}", result),
+                    Ok(ClientEnvelope::Error { error, .. }) => error!("{}", Error::Server { message: error.message, code: error.code } ),
+                    Err(_) => warn!("got unknown message: {}", txt),
+                },
+                Message::Binary(bin) => info!("got binary: {:?}", bin),
+                Message::Ping(ping) => info!("got ping: {:?}", ping),
+                Message::Pong(pong) => info!("got pong: {:?}", pong),
+            }))
         })
-        .map_err(|e| eprintln!("{}", e))
         .map(|_| ())
         .map_err(|_| ());
 
-    let mut rt = tokio::runtime::current_thread::Runtime::new().unwrap();
     rt.spawn(client);
     rt.run().unwrap();
-}
-
-fn handle_message(
-    m: Message,
-    precision: &Cell<Option<(i8, i8)>>,
-) -> Result<Option<ClientMessage>, Error> {
-    match m {
-        Message::Text(txt) => match serde_json::from_str(&txt) {
-            Ok(x) => handle(x, precision),
-            Err(_) => {
-                warn!("got unknown message: {}", txt);
-                Ok(None)
-            }
-        },
-        Message::Binary(bin) => {
-            info!("got binary: {:?}", bin);
-            Ok(None)
-        }
-        Message::Ping(ping) => {
-            info!("got ping: {:?}", ping);
-            Ok(None)
-        }
-        Message::Pong(pong) => {
-            info!("got pong: {:?}", pong);
-            Ok(None)
-        }
-    }
 }
 
 fn exp(s: &str) -> Result<i8, ()> {
@@ -157,34 +159,9 @@ fn exp(s: &str) -> Result<i8, ()> {
     Ok(x as i8)
 }
 
-fn handle(
-    m: ClientEnvelope,
-    precision: &Cell<Option<(i8, i8)>>,
-) -> Result<Option<ClientMessage>, Error> {
-    match m {
-        ClientEnvelope::Message(m) => Ok(Some(m)),
-        ClientEnvelope::Reply { result, .. } => {
-            match result {
-                Reply::GetSymbol(x) => {
-                    debug!("symbol info: {:?}", x);
-                    precision.set(Some((
-                        exp(&x.tick_size).expect("bad tick?"),
-                        exp(&x.quantity_increment).expect("bad quant inc?"),
-                    )));
-                }
-                _ => info!("got reply: {:?}", result),
-            }
-            Ok(None)
-        }
-        ClientEnvelope::Error { error, .. } => {
-            let (message, code) = (error.message, error.code);
-            Err(Error::Server { message, code })
-        }
-    }
-}
-
-fn update_book(m: ClientMessage, book: &mut Book, byvol: bool, precision: &Cell<Option<(i8, i8)>>) {
-    let (aprec, sprec) = precision.get().unwrap();
+fn update_book(m: ClientMessage, book: &mut Book, byvol: bool, precision: (i8, i8)) {
+    trace!("message: {:?}", m);
+    let (aprec, sprec) = precision;
     match m {
         ClientMessage::SnapshotOrderbook(SnapshotOrderbook { ask, bid, .. }) => {
             let order = move |o: Order| {
