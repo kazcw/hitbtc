@@ -7,7 +7,7 @@ use colored::{Color, Colorize};
 use failure::Fail;
 use futures::future::lazy;
 use futures::{Future, Sink, Stream};
-use log::{debug, error, info, log, trace, warn};
+use log::{debug, error, info, trace, warn};
 use simble::symbol;
 use tokio_tungstenite::connect_async;
 use tungstenite::protocol::Message;
@@ -112,20 +112,34 @@ pub fn main() {
     let mut book = Book::default();
     let client = lazy(move || ws.send(sub_req).map_err(Error::Tungstenite))
         .and_then(move |ws| {
-            ws.map_err(Error::Tungstenite).for_each(move |m| Ok(match m {
-                Message::Text(txt) => match serde_json::from_str(&txt) {
-                    Ok(ClientEnvelope::Message(m)) => update_book(m, &mut book, byvol, precision),
-                    Ok(ClientEnvelope::Reply { result: Reply::Bool(true), .. }) => (), // response to subscription request
-                    Ok(ClientEnvelope::Reply { result, .. }) => warn!("got reply post-setup: {:?}", result),
-                    Ok(ClientEnvelope::Error { error, .. }) => error!("{}", Error::Server { message: error.message, code: error.code } ),
-                    Err(_) => warn!("got unknown message: {}", txt),
-                },
-                Message::Binary(bin) => info!("got binary: {:?}", bin),
-                Message::Ping(ping) => info!("got ping: {:?}", ping),
-                Message::Pong(pong) => info!("got pong: {:?}", pong),
-            }))
-        })
-        .map(|_| ())
+            ws.map_err(Error::Tungstenite).for_each(move |m| {
+                Ok(match m {
+                    Message::Text(txt) => match serde_json::from_str(&txt) {
+                        Ok(ClientEnvelope::Message(m)) => {
+                            update_book(m, &mut book, byvol, precision)
+                        }
+                        Ok(ClientEnvelope::Reply {
+                            result: Reply::Bool(true),
+                            ..
+                        }) => (), // response to subscription request
+                        Ok(ClientEnvelope::Reply { result, .. }) => {
+                            warn!("got reply post-setup: {:?}", result)
+                        }
+                        Ok(ClientEnvelope::Error { error, .. }) => error!(
+                            "{}",
+                            Error::Server {
+                                message: error.message,
+                                code: error.code
+                            }
+                        ),
+                        Err(_) => warn!("got unknown message: {}", txt),
+                    },
+                    Message::Binary(bin) => info!("got binary: {:?}", bin),
+                    Message::Ping(ping) => info!("got ping: {:?}", ping),
+                    Message::Pong(pong) => info!("got pong: {:?}", pong),
+                })
+            })
+        }).map(|_| ())
         .map_err(|_| ());
 
     rt.spawn(client);
